@@ -41,8 +41,8 @@ T2_FIXED_PRICE = 380.0 # Price for Tier 2 deficit (Fixed period)
 st.set_page_config(layout="wide")
 
 # Use Markdown for potentially larger/bolder title if desired
-st.markdown("<h1 style='text-align: center; color: #004c6d;'>IMO MEPC 83 - Two-tier GFI-linked pricing system</h1>", unsafe_allow_html=True)
-st.markdown("<h2 style='text-align: center; color: grey;'>Cost and compliance calculator</h2>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #004c6d;'>ABS EAL: IMO MEPC 83 - Two-tier GFI-linked pricing system</h1>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align: center; color: grey;'>Cost and Compliance Calculator</h2>", unsafe_allow_html=True)
 
 
 col1, col2 = st.columns([1, 1])
@@ -72,11 +72,11 @@ with col1:
         attained_gfi = st.number_input("Attained GFI (gCO₂eq/MJ)", value=91.00, format="%.2f", key="custom_gfi")
         st.info(f"Selected: Custom Fuel (LHV: {attained_lhv:,.1f} MJ/t | GFI: {attained_gfi:.2f} gCO₂eq/MJ)")
 
-    # Header styling similar to screenshot
+    # Header styling 
     st.markdown("### Tonnes Consumed:")
     # Use default from original image
     tonnes_consumed = st.number_input("", min_value=0.0, value=5000.0, step=100.0, format="%.2f", label_visibility="collapsed", key="tonnes_consumed")
-    st.caption("per annum")
+    st.caption("per year")
 
 
 with col2:
@@ -88,14 +88,14 @@ with col2:
     t1_ru_price_user = st.number_input("Tier 1 RU Price (2031+):", min_value=0.0, value=100.0, step=10.0, format="%.1f", key="t1_price_user")
     st.caption("$/t CO₂eq")
 
-    t2_ru_price_user = st.number_input("Tier 2 RU Price (2031+):", min_value=0.0, value=360.0, step=10.0, format="%.1f", key="t2_price_user") # Changed default to 360.0
+    t2_ru_price_user = st.number_input("Tier 2 RU Price (2031+):", min_value=0.0, value=380.0, step=10.0, format="%.1f", key="t2_price_user") # Changed default to 380.0
     st.caption("$/t CO₂eq")
 
 
 # --- Calculation Button ---
 # Add some space before the button
 st.markdown("<br>", unsafe_allow_html=True)
-calculate_button = st.button("Calculate and Plot Results") # Removed type="primary" to match screenshot style
+calculate_button = st.button("Calculate and Plot Results") 
 
 # --- Output Section ---
 st.divider()
