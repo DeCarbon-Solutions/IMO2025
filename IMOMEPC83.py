@@ -346,6 +346,10 @@ if st.session_state.show_results:
          st.warning("No results to display. Click 'Calculate and Show Results' after selecting fuels and entering consumption.")
 
 # Add a footer
+st.divider() # Add a line above the footer for separation
+current_year = datetime.datetime.now().year
+# Add your copyright line using st.caption
+st.caption(f"© {current_year} [Developed by Dr. Chenxi Ji]. All rights reserved.")
+# Keep the original disclaimer caption as well
 st.caption("Calculator based on specified IMO MEPC 83 rules and assumptions. Always verify results with official regulations.")
-
 
