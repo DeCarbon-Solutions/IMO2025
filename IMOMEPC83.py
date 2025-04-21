@@ -9,7 +9,7 @@ import datetime
 
 # Predefined Fuel Data (LHV in MJ/t, GFI in gCO2eq/MJ)
 PREDEFINED_FUELS = {
-    "HFO": {"LHV": 41000, "GFI": 91.00},
+    "HFO": {"LHV": 41000, "GFI": 93.30},
     "LNG": {"LHV": 49000, "GFI": 68.00},
     "B24": {"LHV": 41500, "GFI": 75.00},
     "e-Ammonia": {"LHV": 18600, "GFI": 3.00},
