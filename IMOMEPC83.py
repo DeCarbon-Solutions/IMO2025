@@ -14,6 +14,9 @@ PREDEFINED_FUELS = {
     "e-Ammonia": {"LHV": 18600, "GFI": 3.00},
     "bio-Methanol": {"LHV": 19900, "GFI": 5.00},
 }
+# Ensure HFO is always an option, list others for selection
+BENCHMARK_FUEL = "HFO"
+COMPARISON_FUEL_OPTIONS = [f for f in PREDEFINED_FUELS if f != BENCHMARK_FUEL]
 
 # Reference GFI Value
 REFERENCE_GFI = 93.3 # gCO2eq/MJ
@@ -21,14 +24,9 @@ REFERENCE_GFI = 93.3 # gCO2eq/MJ
 # Reduction Targets (%) relative to Reference GFI
 TARGET_REDUCTIONS = {
     # Year: (Base Target Reduction %, Direct Compliance Target Reduction %)
-    2028: (4.0, 17.0),
-    2029: (6.0, 19.0),
-    2030: (8.0, 21.0),
-    2031: (12.4, 25.4),
-    2032: (16.8, 29.8),
-    2033: (21.2, 34.2),
-    2034: (25.6, 38.6),
-    2035: (30.0, 43.0),
+    2028: (4.0, 17.0), 2029: (6.0, 19.0), 2030: (8.0, 21.0),
+    2031: (12.4, 25.4), 2032: (16.8, 29.8), 2033: (21.2, 34.2),
+    2034: (25.6, 38.6), 2035: (30.0, 43.0),
 }
 YEARS = list(TARGET_REDUCTIONS.keys())
 
@@ -36,280 +34,318 @@ YEARS = list(TARGET_REDUCTIONS.keys())
 T1_FIXED_PRICE = 100.0 # Price for Tier 1 deficit
 T2_FIXED_PRICE = 380.0 # Price for Tier 2 deficit (Fixed period)
 
-# --- Streamlit App Layout ---
+# --- Helper Functions ---
+
+def calculate_compliance_costs(fuel_name, fuel_data, tonnes_consumed, pricing):
+    """Calculates compliance costs/revenue and generates detailed summary text."""
+    if not fuel_data or tonnes_consumed <= 0 or fuel_data["LHV"] <= 0:
+        return pd.DataFrame(), ""
+
+    attained_lhv = fuel_data["LHV"]
+    attained_gfi = fuel_data["GFI"]
+    total_energy_mj_y = tonnes_consumed * attained_lhv
+    attained_co2eq_t_y = total_energy_mj_y * attained_gfi / 1_000_000
+
+    results_list = []
+    # Initial part of summary text (will be prepended before loop)
+    summary_header = f"**Calculation Basis ({fuel_name}):**\n"
+    summary_header += f"Fuel: {fuel_name} ({tonnes_consumed:,.2f} t/y), Attained GFI: {attained_gfi:.2f} gCO₂eq/MJ\n"
+    summary_header += f"LHV: {attained_lhv:,.1f} MJ/t\n"
+    summary_header += f"Total Energy: {total_energy_mj_y:,.0f} MJ/y\n"
+    summary_header += f"Reference GFI: {REFERENCE_GFI:.1f} gCO₂eq/MJ\n\n"
+    summary_header += f"**Pricing Assumptions:**\n"
+    summary_header += f"  SU Trading Price: ${pricing['surplus']:.2f}/t CO₂eq\n"
+    summary_header += f"  RU Prices (2028-30): T1=${T1_FIXED_PRICE:.2f}, T2=${T2_FIXED_PRICE:.2f}\n"
+    summary_header += f"  RU Prices (2031+): T1=${pricing['t1_user']:.2f}, T2=${pricing['t2_user']:.2f}\n\n"
+    summary_header += f"--- **Annual Calculation Results** ---\n\n"
+
+    annual_summary_parts = [] # Store text parts for each year
+
+    for year in YEARS:
+        year_text = "" # Text for this specific year
+        base_reduction_pct, direct_reduction_pct = TARGET_REDUCTIONS[year]
+        target_gfi_base = REFERENCE_GFI * (1 - base_reduction_pct / 100.0)
+        target_gfi_direct = REFERENCE_GFI * (1 - direct_reduction_pct / 100.0)
+        target_co2_base_t_y = total_energy_mj_y * target_gfi_base / 1_000_000
+        target_co2_direct_t_y = total_energy_mj_y * target_gfi_direct / 1_000_000
+
+        t1_price = T1_FIXED_PRICE if year <= 2030 else pricing['t1_user']
+        t2_price = T2_FIXED_PRICE if year <= 2030 else pricing['t2_user']
+        surplus_unit_price = pricing['surplus']
+
+        deficit_t1_co2, deficit_t2_co2, surplus_co2 = 0.0, 0.0, 0.0
+        cost_t1, cost_t2, revenue_surplus = 0.0, 0.0, 0.0
+        compliance_status = ""
+
+        # --- Compliance Logic ---
+        if attained_co2eq_t_y > target_co2_direct_t_y:
+            deficit_t1_co2 = attained_co2eq_t_y - target_co2_direct_t_y
+            cost_t1 = deficit_t1_co2 * t1_price
+            compliance_status = "Deficit vs Direct Target"
+            if attained_co2eq_t_y > target_co2_base_t_y:
+                deficit_t2_co2 = attained_co2eq_t_y - target_co2_base_t_y
+                cost_t2 = deficit_t2_co2 * t2_price
+                compliance_status += " & Base Target"
+            # No "else" needed here for status, base compliance is implied if inner if is false
+        else:
+            surplus_co2 = target_co2_direct_t_y - attained_co2eq_t_y
+            revenue_surplus = surplus_co2 * surplus_unit_price
+            compliance_status = "Surplus vs Direct Target"
+            # Optional check, might be impossible if Base Target GFI > Direct Target GFI
+            if attained_co2eq_t_y > target_co2_base_t_y:
+                 compliance_status += " (Warning: Exceeds Base Target)"
+
+        net_outcome = revenue_surplus - cost_t1 - cost_t2
+
+        # --- Build Year Text (matching the detailed format) ---
+        year_text += f"--- **Year {year}** ---\n"
+        year_text += f"Targets GFI (Base / Direct): {target_gfi_base:.3f} ({base_reduction_pct:.1f}%) / {target_gfi_direct:.3f} ({direct_reduction_pct:.1f}%) gCO₂eq/MJ\n"
+        year_text += f"Target CO₂eq (Base / Direct): {target_co2_base_t_y:,.1f} t / {target_co2_direct_t_y:,.1f} t\n"
+        year_text += f"Attained CO₂eq: {attained_co2eq_t_y:,.1f} t\n"
+        year_text += f"Status: {compliance_status}\n"
+
+        if net_outcome < 0: # Net Cost
+             if deficit_t1_co2 > 0: year_text += f"Tier 1 Deficit: {deficit_t1_co2:,.3f} t CO₂eq\n"
+             if deficit_t2_co2 > 0: year_text += f"Tier 2 Deficit: {deficit_t2_co2:,.3f} t CO₂eq\n"
+             year_text += f"Net Outcome (Cost): ${abs(net_outcome):,.2f}\n"
+             if cost_t1 > 0: year_text += f"  (T1 RU Cost: ${cost_t1:,.2f} @ ${t1_price:.2f}/t)\n"
+             if cost_t2 > 0: year_text += f"  (T2 RU Cost: ${cost_t2:,.2f} @ ${t2_price:.2f}/t)\n"
+        elif net_outcome > 0: # Net Revenue
+             year_text += f"Surplus vs Direct: {surplus_co2:,.3f} t CO₂eq\n"
+             year_text += f"Net Outcome (Potential Revenue): ${net_outcome:,.2f}\n"
+             year_text += f"  (Potential SU Revenue: ${revenue_surplus:,.2f} @ ${surplus_unit_price:.2f}/t)\n"
+        else: # Zero balance
+             year_text += f"Net Outcome: $0.00\n"
+        year_text += "\n"
+        annual_summary_parts.append(year_text)
+
+        # --- Store data for DataFrame ---
+        results_list.append({
+            "Year": year, "Fuel": fuel_name,
+            "Net Outcome ($)": net_outcome,
+            "Revenue Surplus ($)": revenue_surplus,
+            "Cost T1 ($)": cost_t1, "Cost T2 ($)": cost_t2,
+            "Status": compliance_status,
+        })
+
+    results_df = pd.DataFrame(results_list)
+    # Add Million $ columns
+    results_df['Net Outcome (Millions USD)'] = results_df['Net Outcome ($)'] / 1_000_000
+    results_df['Revenue Surplus (Millions USD)'] = results_df['Revenue Surplus ($)'] / 1_000_000
+    results_df['Cost T1 (Millions USD)'] = results_df['Cost T1 ($)'] / 1_000_000
+    results_df['Cost T2 (Millions USD)'] = results_df['Cost T2 ($)'] / 1_000_000
+
+    # Combine header and annual parts for the full detailed text
+    full_summary_text = summary_header + "".join(annual_summary_parts)
+
+    return results_df, full_summary_text
+
+def plot_comparison(df_combined, tonnes_consumed):
+    """Generates the comparison plot for multiple fuels."""
+    if df_combined.empty: return go.Figure()
+    fig = px.bar(df_combined, x='Year', y='Net Outcome (Millions USD)', color='Fuel',
+                 title=f"Comparison of Net Annual Outcome ({tonnes_consumed:,.0f} t/y Consumed)",
+                 labels={'Net Outcome (Millions USD)': 'Net Revenue (+) / Cost (-) (Millions USD)'},
+                 barmode='group', color_discrete_sequence=px.colors.qualitative.Plotly)
+    fig.update_layout(yaxis_title="Net Revenue (+) / Cost (-) (Millions USD)", xaxis_title="Year",
+                      legend_title="Fuel Type", plot_bgcolor='white', yaxis_gridcolor='lightgrey',
+                      xaxis=dict(tickmode='linear'),
+                      legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
+    fig.add_hline(y=0, line_width=1, line_color="black")
+    return fig
+
+# --- Initialize Session State ---
+# We still need session state to store inputs and results across reruns
+if 'selected_comparison_fuels' not in st.session_state:
+    st.session_state.selected_comparison_fuels = [] # User selection (excluding HFO initially)
+if 'final_fuel_list' not in st.session_state:
+     st.session_state.final_fuel_list = [BENCHMARK_FUEL] # Always start with HFO
+if 'tonnes_consumed' not in st.session_state:
+    st.session_state.tonnes_consumed = 5000.0
+if 'pricing' not in st.session_state:
+    st.session_state.pricing = {'surplus': 380.0, 't1_user': 100.0, 't2_user': 380.0}
+if 'comparison_results_df' not in st.session_state:
+    st.session_state.comparison_results_df = pd.DataFrame()
+if 'detailed_summaries' not in st.session_state: # Dict to store {fuel_name: summary_text}
+    st.session_state.detailed_summaries = {}
+if 'show_results' not in st.session_state:
+    st.session_state.show_results = False
+
+# --- Callback to reset results on input change ---
+def reset_calculation():
+    st.session_state.show_results = False
+    st.session_state.comparison_results_df = pd.DataFrame()
+    st.session_state.detailed_summaries = {}
+    # Update final fuel list based on current selection when inputs change
+    update_final_fuel_list()
+
+def update_final_fuel_list():
+     # Start with HFO, add selected unique fuels
+    user_selection = st.session_state.get('compare_fuels_multi', []) # Get current multiselect value
+    st.session_state.final_fuel_list = [BENCHMARK_FUEL] + [f for f in user_selection if f != BENCHMARK_FUEL]
+
+
+# --- App Layout ---
 
 st.set_page_config(layout="wide")
 
-# Use Markdown for potentially larger/bolder title if desired
-st.markdown("<h1 style='text-align: center; color: #004c6d;'>ABS EAL: IMO MEPC 83 - Two-tier GFI-linked pricing system</h1>", unsafe_allow_html=True)
-st.markdown("<h2 style='text-align: center; color: grey;'>Cost and Compliance Calculator</h2>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #004c6d;'>ABS EAL: IMO MEPC 83 - Fuel Compliance Comparison</h1>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align: center; color: grey;'>Cost and Compliance Calculator </h2>", unsafe_allow_html=True)
 
+# --- Input Section (All visible) ---
 
-col1, col2 = st.columns([1, 1])
+# Step 1 (Implied): Select Fuels for Comparison
+st.subheader("1. Select Additional Fuels for Comparison")
+st.markdown(f"**{BENCHMARK_FUEL}** is always included as the benchmark.")
+st.session_state.selected_comparison_fuels = st.multiselect(
+    f"Select fuels to compare against {BENCHMARK_FUEL}:",
+    COMPARISON_FUEL_OPTIONS, # Offer fuels other than HFO
+    default=st.session_state.selected_comparison_fuels, # Remember previous selection
+    key='compare_fuels_multi', # Unique key for multiselect
+    on_change=reset_calculation # Reset results if selection changes
+)
+# Update the final list immediately for display/calculation prep
+update_final_fuel_list()
+if len(st.session_state.final_fuel_list) > 1: # Show info if comparing > 1 fuel
+    selected_info = " | ".join([f"{f} (GFI: {PREDEFINED_FUELS[f]['GFI']:.2f})" for f in st.session_state.final_fuel_list])
+    st.info(f"Comparing: {selected_info}")
+else:
+    st.info(f"Only comparing the benchmark: {BENCHMARK_FUEL} (GFI: {PREDEFINED_FUELS[BENCHMARK_FUEL]['GFI']:.2f})")
 
-# --- Input Section ---
-with col1:
-    # Removed Input Method selector as it wasn't in the last screenshot
-    # st.header("Input Method:")
-    # input_method = st.radio("", ("Predefined Fuel", "Custom GFI"), label_visibility="collapsed", key="input_method")
-    input_method = "Predefined Fuel" # Hardcoding based on UI look
-
-    st.subheader("Fuel Type:") # Changed header level for visual hierarchy
-    if input_method == "Predefined Fuel":
-        fuel_options = list(PREDEFINED_FUELS.keys())
-        # Default to bio-Methanol as per screenshot
-        default_index_fuel = fuel_options.index("bio-Methanol") if "bio-Methanol" in fuel_options else 0
-        fuel_type = st.radio("", fuel_options, index=default_index_fuel, horizontal=True, label_visibility="collapsed", key="fuel_type_radio")
-        selected_fuel_data = PREDEFINED_FUELS[fuel_type]
-        attained_lhv = selected_fuel_data["LHV"]
-        attained_gfi = selected_fuel_data["GFI"]
-        # Using st.markdown for potentially better formatting control
-        st.markdown(f"<div style='background-color:#e8f0fe; padding: 10px; border-radius: 5px;'>Selected: <b>{fuel_type}</b> (LHV: {attained_lhv:,.1f} MJ/t | GFI: {attained_gfi:.2f} gCO₂eq/MJ)</div>", unsafe_allow_html=True)
-
-    else: # Keep custom logic if needed, though hidden based on screenshot
-        fuel_type = "Custom"
-        attained_lhv = st.number_input("Fuel LHV (MJ/t)", value=41000.0, format="%.1f", key="custom_lhv")
-        attained_gfi = st.number_input("Attained GFI (gCO₂eq/MJ)", value=91.00, format="%.2f", key="custom_gfi")
-        st.info(f"Selected: Custom Fuel (LHV: {attained_lhv:,.1f} MJ/t | GFI: {attained_gfi:.2f} gCO₂eq/MJ)")
-
-    # Header styling 
-    st.markdown("### Tonnes Consumed:")
-    # Use default from original image
-    tonnes_consumed = st.number_input("", min_value=0.0, value=5000.0, step=100.0, format="%.2f", label_visibility="collapsed", key="tonnes_consumed")
-    st.caption("per year")
-
-
-with col2:
-    st.subheader("Pricing Assumptions:") # Changed header level
-    # Use defaults from screenshot
-    surplus_price = st.number_input("Assumed surplus unit (SU) trading price:", min_value=0.0, value=380.0, step=10.0, format="%.1f", key="surplus_price")
-    st.caption("$/t CO₂eq (Revenue for performance better than Direct Compliance Target)")
-
-    t1_ru_price_user = st.number_input("Tier 1 RU Price (2031+):", min_value=0.0, value=100.0, step=10.0, format="%.1f", key="t1_price_user")
-    st.caption("$/t CO₂eq")
-
-    t2_ru_price_user = st.number_input("Tier 2 RU Price (2031+):", min_value=0.0, value=380.0, step=10.0, format="%.1f", key="t2_price_user") # Changed default to 380.0
-    st.caption("$/t CO₂eq")
-
-
-# --- Calculation Button ---
-# Add some space before the button
-st.markdown("<br>", unsafe_allow_html=True)
-calculate_button = st.button("Calculate and Plot Results") 
-
-# --- Output Section ---
 st.divider()
 
-results_col, plot_col = st.columns([1, 1.5]) # Adjust column ratios if needed
+# Step 2 (Implied): Enter Consumption
+st.subheader("2. Enter Annual Fuel Consumption")
+col_cons1, col_cons2 = st.columns([1, 2])
+with col_cons1:
+    st.session_state.tonnes_consumed = st.number_input(
+        "Tonnes Consumed per annum (applied to all fuels):",
+        min_value=0.0, value=st.session_state.tonnes_consumed, step=100.0, format="%.2f",
+        key='tonnes_consumed_input',
+        on_change=reset_calculation # Reset if consumption changes
+    )
+st.divider()
 
-with results_col:
-    st.subheader("Calculation Results") # Changed header level
-    results_text_area = st.empty() # Placeholder for text results
+# Step 3 (Implied): Review Pricing
+st.subheader("3. Review Pricing Assumptions")
+col_price1, col_price2 = st.columns(2)
+with col_price1:
+    st.session_state.pricing['surplus'] = st.number_input(
+        "Assumed surplus unit (SU) trading price ($/t CO₂eq):",
+        min_value=0.0, value=st.session_state.pricing['surplus'], step=10.0, format="%.1f",
+        key='surplus_price_input', on_change=reset_calculation
+        )
+    st.session_state.pricing['t1_user'] = st.number_input(
+        "Tier 1 RU Price (2031+) ($/t CO₂eq):",
+        min_value=0.0, value=st.session_state.pricing['t1_user'], step=10.0, format="%.1f",
+        key='t1_price_input', on_change=reset_calculation
+        )
+with col_price2:
+    st.session_state.pricing['t2_user'] = st.number_input(
+        "Tier 2 RU Price (2031+) ($/t CO₂eq):",
+        min_value=0.0, value=st.session_state.pricing['t2_user'], step=10.0, format="%.1f",
+        key='t2_price_input', on_change=reset_calculation
+        )
+    st.caption(f"Note: Fixed prices apply 2028-2030 (T1=${T1_FIXED_PRICE:.2f}, T2=${T2_FIXED_PRICE:.2f})")
+st.divider()
 
-with plot_col:
-    st.subheader("Result Plot") # Changed header level
-    plot_area = st.empty() # Placeholder for plot
+# Step 4 (Implied): Calculate
+st.subheader("4. Calculate Comparison")
 
-# --- Calculation Logic ---
-if calculate_button:
-    if tonnes_consumed <= 0 or attained_lhv <= 0:
-        st.error("Tonnes Consumed and LHV must be positive values.")
-        # Clear previous results if inputs are invalid
-        results_text_area.empty()
-        plot_area.empty()
+# --- Highlighted Calculation Button ---
+st.markdown("""
+<style>
+.stButton>button {
+    background-color: #FF4B4B; color: white; font-weight: bold;
+    padding: 10px 20px; border: none; border-radius: 5px; font-size: 1.1em;
+}
+.stButton>button:hover { background-color: #E03C3C; color: white; }
+</style>
+""", unsafe_allow_html=True)
+
+if st.button("Calculate and Show Results"):
+    if not st.session_state.final_fuel_list:
+        st.error("Please select at least one fuel to compare.")
+    elif st.session_state.tonnes_consumed <= 0:
+        st.error("Tonnes Consumed must be positive.")
+        reset_calculation() # Clear any potentially old results
     else:
-        # 1. Basic Calculations
-        total_energy_mj_y = tonnes_consumed * attained_lhv
-        attained_co2eq_t_y = total_energy_mj_y * attained_gfi / 1_000_000 # g to tonnes
+        st.session_state.show_results = True
+        all_results_list = []
+        calculated_summaries = {}
 
-        results = []
-        # Using Markdown with bold for Calculation Basis header
-        summary_text = f"**Calculation Basis:**\n"
-        summary_text += f"Fuel: {fuel_type} ({tonnes_consumed:,.2f} t/y), Attained GFI: {attained_gfi:.2f} gCO₂eq/MJ\n"
-        summary_text += f"LHV: {attained_lhv:,.1f} MJ/t\n"
-        summary_text += f"Total Energy: {total_energy_mj_y:,.0f} MJ/y\n"
-        summary_text += f"Reference GFI: {REFERENCE_GFI:.1f} gCO₂eq/MJ\n\n"
-
-        summary_text += f"**Assumed SU trading price:** ${surplus_price:.2f}/t CO₂eq\n"
-        summary_text += f"**RU Prices ($/t CO₂eq):**\n"
-        summary_text += f"  2028-2030 (Fixed): T1=${T1_FIXED_PRICE:.2f}, T2=${T2_FIXED_PRICE:.2f}\n"
-        summary_text += f"  2031 Onwards (User Input): T1=${t1_ru_price_user:.2f}, T2=${t2_ru_price_user:.2f}\n\n"
-
-        summary_text += f"--- **Annual Results ({min(YEARS)}-{max(YEARS)})** ---\n\n"
-
-        for year in YEARS:
-            # (Calculation logic for targets, deficits, costs, surplus, revenue remains the same as previous correct version)
-            # Get reduction percentages
-            base_reduction_pct, direct_reduction_pct = TARGET_REDUCTIONS[year]
-
-            # Calculate absolute GFI targets
-            target_gfi_base = REFERENCE_GFI * (1 - base_reduction_pct / 100.0)
-            target_gfi_direct = REFERENCE_GFI * (1 - direct_reduction_pct / 100.0)
-
-            # Calculate target CO2 emissions in tonnes
-            target_co2_base_t_y = total_energy_mj_y * target_gfi_base / 1_000_000
-            target_co2_direct_t_y = total_energy_mj_y * target_gfi_direct / 1_000_000
-
-            # Determine prices for the year
-            t1_price = T1_FIXED_PRICE if year <= 2030 else t1_ru_price_user
-            t2_price = T2_FIXED_PRICE if year <= 2030 else t2_ru_price_user
-
-            # Initialize results for the year
-            deficit_t1_co2 = 0.0
-            deficit_t2_co2 = 0.0
-            surplus_co2 = 0.0
-            cost_t1 = 0.0
-            cost_t2 = 0.0
-            revenue_surplus = 0.0
-            compliance_status = ""
-
-            # --- Apply New Tiered Deficit/Surplus Logic ---
-            if attained_co2eq_t_y > target_co2_direct_t_y:
-                deficit_t1_co2 = attained_co2eq_t_y - target_co2_direct_t_y
-                cost_t1 = deficit_t1_co2 * t1_price
-                compliance_status = "Deficit vs Direct Target"
-                if attained_co2eq_t_y > target_co2_base_t_y:
-                    deficit_t2_co2 = attained_co2eq_t_y - target_co2_base_t_y
-                    cost_t2 = deficit_t2_co2 * t2_price
-                    compliance_status += " & Base Target"
+        with st.spinner("Calculating..."):
+            for fuel_name in st.session_state.final_fuel_list:
+                fuel_data = PREDEFINED_FUELS.get(fuel_name)
+                if fuel_data:
+                    df, summary_txt = calculate_compliance_costs(
+                        fuel_name, fuel_data,
+                        st.session_state.tonnes_consumed,
+                        st.session_state.pricing
+                    )
+                    if not df.empty:
+                        all_results_list.append(df)
+                        calculated_summaries[fuel_name] = summary_txt
                 else:
-                     compliance_status += " (Compliant vs Base)"
+                    st.warning(f"Could not find data for fuel: {fuel_name}")
+
+            if all_results_list:
+                st.session_state.comparison_results_df = pd.concat(all_results_list, ignore_index=True)
+                st.session_state.detailed_summaries = calculated_summaries
             else:
-                surplus_co2 = target_co2_direct_t_y - attained_co2eq_t_y
-                revenue_surplus = surplus_co2 * surplus_price
-                compliance_status = "Surplus vs Direct Target"
-                # This check might be redundant if Base Target GFI > Direct Target GFI always
-                if attained_co2eq_t_y > target_co2_base_t_y:
-                     compliance_status += " (Warning: Exceeds Base Target)"
+                st.session_state.comparison_results_df = pd.DataFrame()
+                st.session_state.detailed_summaries = {}
+                st.error("No valid results could be calculated.")
 
-            net_outcome = revenue_surplus - cost_t1 - cost_t2
+st.divider()
 
-            # --- Append Results Summary ---
-            summary_text += f"--- **Year {year}** ---\n"
-            # ... (rest of summary text generation is the same) ...
-            summary_text += f"Targets GFI (Base / Direct): {target_gfi_base:.3f} ({base_reduction_pct:.1f}%) / {target_gfi_direct:.3f} ({direct_reduction_pct:.1f}%) gCO₂eq/MJ\n"
-            summary_text += f"Target CO₂eq (Base / Direct): {target_co2_base_t_y:,.1f} t / {target_co2_direct_t_y:,.1f} t\n"
-            summary_text += f"Attained CO₂eq: {attained_co2eq_t_y:,.1f} t\n"
-            summary_text += f"Status: {compliance_status}\n"
+# --- Results Section ---
+if st.session_state.show_results:
+    st.header("Calculation Results")
 
-            if net_outcome < 0: # Net Cost
-                 summary_text += f"Deficits (T1 / T2): {deficit_t1_co2:,.3f} t / {deficit_t2_co2:,.3f} t CO₂eq\n"
-                 summary_text += f"Net Outcome (Cost): ${abs(net_outcome):,.2f}\n"
-                 if cost_t1 > 0:
-                     summary_text += f"  (T1 RU Cost: ${cost_t1:,.2f} @ ${t1_price:.2f}/t)\n"
-                 if cost_t2 > 0:
-                     summary_text += f"  (T2 RU Cost: ${cost_t2:,.2f} @ ${t2_price:.2f}/t)\n"
-            elif net_outcome > 0: # Net Revenue
-                 summary_text += f"Surplus vs Direct: {surplus_co2:,.3f} t CO₂eq\n"
-                 summary_text += f"Net Outcome (Potential Revenue): ${net_outcome:,.2f}\n"
-                 summary_text += f"  (Potential SU Revenue: ${revenue_surplus:,.2f} @ ${surplus_price:.2f}/t)\n"
-            else: # Zero balance
-                 summary_text += f"Net Outcome: $0.00\n"
-            summary_text += "\n"
-
-
-            results.append({
-                "Year": year,
-                "Target GFI Base": target_gfi_base,
-                "Target GFI Direct": target_gfi_direct,
-                "Attained GFI": attained_gfi,
-                "Target CO2 Base (t)": target_co2_base_t_y,
-                "Target CO2 Direct (t)": target_co2_direct_t_y,
-                "Attained CO2eq (t)": attained_co2eq_t_y,
-                "Deficit T1 (t)": deficit_t1_co2,
-                "Deficit T2 (t)": deficit_t2_co2,
-                "Surplus (t)": surplus_co2,
-                "Cost T1 ($)": cost_t1,
-                "Cost T2 ($)": cost_t2,
-                "Revenue Surplus ($)": revenue_surplus,
-                "Net Outcome ($)": net_outcome,
-                "T1 Price": t1_price,
-                "T2 Price": t2_price,
-                "Surplus Price": surplus_price
-            })
-
-        results_df = pd.DataFrame(results)
-
-        # --- Display Calculation Results ---
-        # Use markdown=True in text_area for bolding etc. if needed, but pure text is fine
-        results_text_area.text_area(" ", summary_text, height=500, key="results_display")
-
-        # --- Generate Plot ---
-        # Convert outcomes to Millions USD for plotting
-        results_df['Plot Revenue'] = results_df['Revenue Surplus ($)'].apply(lambda x: x / 1_000_000 if x > 0 else 0)
-        results_df['Plot Cost T1'] = results_df['Cost T1 ($)'].apply(lambda x: -x / 1_000_000 if x > 0 else 0)
-        results_df['Plot Cost T2'] = results_df['Cost T2 ($)'].apply(lambda x: -x / 1_000_000 if x > 0 else 0)
-
-        # Create plot data
-        plot_data = results_df[['Year']].copy()
-        plot_data['Potential SU Revenue'] = results_df['Plot Revenue']
-        plot_data['Tier 1 RU Cost'] = results_df['Plot Cost T1']
-        plot_data['Tier 2 RU Cost'] = results_df['Plot Cost T2']
-
-        # Melt data for Plotly express bar chart (long format)
-        plot_data_melted = plot_data.melt(id_vars=['Year'],
-                                          value_vars=['Potential SU Revenue', 'Tier 1 RU Cost', 'Tier 2 RU Cost'],
-                                          var_name='Component',
-                                          value_name='Value (Millions USD)')
-
-        # Filter out zero values to avoid plotting them
-        # Using a small tolerance might be safer than exact zero comparison with floats
-        tolerance = 1e-9
-        plot_data_melted = plot_data_melted[abs(plot_data_melted['Value (Millions USD)']) > tolerance]
-
-        # ---- DEBUGGING: Optionally uncomment to see the data going into the plot ----
-        # st.subheader("Debug: Plot Data (Melted & Filtered)")
-        # st.dataframe(plot_data_melted)
-        # ---- END DEBUGGING ----
-
-        if plot_data_melted.empty:
-            plot_area.warning("No significant cost or revenue data to plot.")
+    if not st.session_state.comparison_results_df.empty:
+        # 1. Comparison Plot
+        st.subheader("Comparison Plot (Net Outcome)")
+        fig_comp = plot_comparison(st.session_state.comparison_results_df, st.session_state.tonnes_consumed)
+        if not fig_comp.data:
+             st.info("No comparison data to plot.")
         else:
-            # Define colors (ensure all potential keys are present)
-            colors = {
-                'Potential SU Revenue': 'lightblue', # Or a green color for revenue? e.g. '#2ca02c'
-                'Tier 1 RU Cost': '#1f77b4',        # Blue
-                'Tier 2 RU Cost': '#004c6d'         # Darker Blue
-            }
+            st.plotly_chart(fig_comp, use_container_width=True)
+        st.divider()
 
-            # Filter the color map to only include components present in the data
-            components_present = plot_data_melted['Component'].unique()
-            color_map_filtered = {k: v for k, v in colors.items() if k in components_present}
+        # 2. Summary Table
+        st.subheader("Comparison Summary Table")
+        try:
+            summary_table = st.session_state.comparison_results_df.groupby('Fuel')['Net Outcome (Millions USD)'].agg(['mean', 'sum']).reset_index()
+            summary_table.rename(columns={'mean': 'Avg Annual Net Outcome (M USD)', 'sum': 'Total Net Outcome 2028-35 (M USD)'}, inplace=True)
+            # Sort table to potentially match multiselect order or keep HFO first if desired
+            summary_table['Fuel'] = pd.Categorical(summary_table['Fuel'], categories=st.session_state.final_fuel_list, ordered=True)
+            summary_table = summary_table.sort_values('Fuel')
+            st.dataframe(summary_table.style.format({
+                'Avg Annual Net Outcome (M USD)': '{:,.2f}',
+                'Total Net Outcome 2028-35 (M USD)': '{:,.2f}'
+                }), use_container_width=True)
+        except Exception as e:
+            st.error(f"Could not generate summary table: {e}")
+        st.divider()
 
+        # 3. Detailed Year-by-Year Results per Fuel
+        st.subheader("Detailed Annual Results by Fuel")
+        if not st.session_state.detailed_summaries:
+             st.warning("Detailed summaries are not available.")
+        else:
+            for fuel_name in st.session_state.final_fuel_list: # Iterate in the final calculated order
+                summary_text = st.session_state.detailed_summaries.get(fuel_name)
+                if summary_text:
+                    with st.expander(f"Show Detailed Annual Results for: {fuel_name}"):
+                        st.text_area(f"Details for {fuel_name}", summary_text, height=500, key=f"details_{fuel_name}", disabled=True)
+                else:
+                    st.warning(f"Detailed summary for {fuel_name} could not be retrieved.")
 
-            try:
-                fig = px.bar(plot_data_melted,
-                             x='Year',
-                             y='Value (Millions USD)',
-                             color='Component',
-                             title=f"Fuel: {fuel_type} ({tonnes_consumed:,.0f} t/y), Attained GFI: {attained_gfi:.2f} gCO₂eq/MJ",
-                             labels={'Value (Millions USD)': 'Annual Revenue (+) / Cost (-) (Millions USD)'},
-                             color_discrete_map=color_map_filtered, # Use filtered map
-                             barmode='relative'
-                            )
+    else:
+         st.warning("No results to display. Click 'Calculate and Show Results' after selecting fuels and entering consumption.")
 
-                # Customize layout
-                fig.update_layout(
-                    yaxis_title="Annual Revenue (+) / Cost (-) (Millions USD)",
-                    xaxis_title="Year",
-                    legend_title="Legend",
-                    plot_bgcolor='white',
-                    yaxis_gridcolor='lightgrey',
-                    xaxis=dict(tickmode='linear'),
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5)
-                )
-                fig.add_hline(y=0, line_width=1, line_color="black")
-
-                # --- Display Plot ---
-                plot_area.plotly_chart(fig, use_container_width=True)
-
-            except Exception as e:
-                plot_area.error(f"An error occurred while generating the plot: {e}")
-                st.exception(e) # Show full traceback in the app for debugging
-
-# Initial display before calculation
-else: # Use else block to ensure placeholders are shown only initially
-     results_text_area.info("Enter parameters and click 'Calculate and Plot Results'.")
-     plot_area.info("Plot will appear here after calculation.")
+# Add a footer
+st.caption("Calculator based on specified IMO MEPC 83 rules and assumptions. Always verify results with official regulations.")
 
 
