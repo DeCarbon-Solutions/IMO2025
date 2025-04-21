@@ -1,0 +1,13 @@
+streamlit
+pandas
+numpy
+plotly
+
+# Stage the changes
+git add requirements.txt
+
+# Commit the changes
+git commit -m "Add plotly to requirements"
+
+# Push to GitHub
+git push origin main 
