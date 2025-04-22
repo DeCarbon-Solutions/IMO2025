@@ -192,7 +192,7 @@ def update_final_fuel_list():
 
 st.set_page_config(layout="wide")
 
-st.markdown("<h1 style='text-align: center; color: #004c6d;'>ABS EAL: IMO MEPC 83 - Fuel Compliance Comparison</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #004c6d;'>ABS EAL: IMO MEPC 83 Net Zero Framework- Fuel Compliance Comparison</h1>", unsafe_allow_html=True)
 st.markdown("<h2 style='text-align: center; color: grey;'>Cost and Compliance Calculator </h2>", unsafe_allow_html=True)
 
 # --- Input Section (All visible) ---
