@@ -354,5 +354,5 @@ current_year = datetime.datetime.now().year
 # Add your copyright line using st.caption
 st.caption(f"© {current_year} [Developed by ABS EAL Lead: Dr. Chenxi Ji]. All rights reserved.")
 # Keep the original disclaimer caption as well
-st.caption("Calculator based on specified IMO MEPC 83 rules and assumptions. Always verify results with official regulations.")
+st.caption("Calculator based on specified IMO MEPC 83 rules and MEPC 391(80) assumptions. Always verify results with latest official IMO regulations.")
 
